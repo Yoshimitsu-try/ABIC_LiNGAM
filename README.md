@@ -26,26 +26,68 @@ pip install numpy autograd scipy
 ## Quick start
 
 ```python
+# === Quick demo: generate MGGD data and run ABIC LiNGAM ===
+# Requirements:
+#   pip install numpy autograd scipy
+# Repo files needed:
+#   - abic_lingam.py  (ABIC_LiNGAM class)
+#   - mggd.py         (MGGD, EstMGGD classes; used by the imports below)
+
 import numpy as np
-from abic_lingam import ABIC_LiNGAM  # module from this repo
+from abic_lingam import ABIC_LiNGAM
+from mggd import MGGD  # MGGD sampler (non-Gaussian noise when β≠1)
 
-# X: (n, d) with rows = samples, columns = variables; center columns to mean 0
-rng = np.random.default_rng(0)
-n, d = 1000, 5
-X = rng.normal(size=(n, d))
+# -----------------------
+# 1) Ground-truth ADMG
+#    DGP: x0 -> x1 -> x2 -> x3, and bidirected x1 <-> x3
+# -----------------------
+d = 4
+B_true = np.zeros((d, d), dtype=float)
+B_true[0, 1] = 1.0    # x0 -> x1
+B_true[1, 2] = -1.5   # x1 -> x2
+B_true[2, 3] = 1.0    # x2 -> x3
+
+Omega_true = np.array([
+    [1.2, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.6],  # x1 <-> x3
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.6, 0.0, 1.0],
+], dtype=float)
+
+# -----------------------
+# 2) Sample epsilon ~ MGGD(0, Omega_true, beta_shape), then X = epsilon (I - B)^{-1}
+# -----------------------
+rs = np.random.default_rng(42)
+n = 1000
+beta_shape = 3.0  # Non-Gaussian (Gaussian if β=1)
+
+# MGGD samples (each row is one sample)
+mggd_eps = MGGD(mu=np.zeros(d), Sigma=Omega_true, beta=beta_shape)
+eps = mggd_eps.sample(n=n)               # shape: (n, d)
+
+# Linear SEM: x = xB + ε, so X = ε(I - B)^{-1}
+A = np.eye(d) - B_true
+X = eps @ np.linalg.inv(A)
+
+# Recommended: center each column (standardize if needed)
 X -= X.mean(axis=0, keepdims=True)
+# X /= X.std(axis=0, keepdims=True)  # Uncomment for better numerical stability
 
-# Non-Gaussian (try beta=3). Use beta=1 for the Gaussian/ABIC case.
-model = ABIC_LiNGAM(X, beta=3.0, lam=0.05, rng=0)
+# -----------------------
+# 3) Fit ABIC LiNGAM (set β to match the error distribution's shape)
+# -----------------------
+model = ABIC_LiNGAM(X, beta=beta_shape, lam=0.05, rng=0)
 
-# Optional prior knowledge
-levels = [["x0","x1"], ["x2","x3","x4"]]  # forbid edges from later tier to earlier tier
-exogenous = {"x0"}                        # forbid bidirected edges touching x0
+# Prior knowledge (optional): specify DAG levels (here we enforce x0 -> x1 -> x2 -> x3)
+levels = [["x0"], ["x1"], ["x2"], ["x3"]]  # Disallow edges from later levels to earlier levels
+exogenous = set()                          # e.g., adding {"x0"} forbids bidirected edges incident to x0
 
-B, Omega = model.fit(levels=levels, exogenous=exogenous, verbose=False)
+B_est, Omega_est = model.fit(levels=levels, exogenous=exogenous, verbose=False)
 
-print("Directed B:\n", B)         # directed coefficients
-print("Bidirected Omega:\n", Omega)  # bidirected/noise covariance (diag = noise)
+print("beta_shape =", beta_shape)
+print("Estimated directed B:\n", B_est)
+print("Estimated bidirected Omega:\n", Omega_est)
+
 ```
 
 Notes:
@@ -139,5 +181,4 @@ This is a **clean‑room** implementation. Any third‑party resources (e.g., dc
 
 We thank Bhattacharya et al. (2021) and the dcd project for foundational ideas on differentiable ADMG constraints. This repository re‑implements the approach with a non‑Gaussian score and alternative penalties—**not** a copy of existing code.
 
-```
-```
+
